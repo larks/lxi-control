@@ -178,7 +178,7 @@ static int parse_options(int argc, char *argv[])
       case 'f':
         printf("file: %s\n", optarg);
 				file = fopen(optarg, "rb");
-        if (!file){
+        if (file == NULL){
           fprintf(stdout, "Error opening file %s\n", optarg);
           exit(1);
         }
@@ -188,19 +188,20 @@ static int parse_options(int argc, char *argv[])
         rewind(file);
         printf("waveform size: %ld\n", lSize);
 
-        waveform_buf = (char*) calloc(1, lSize+1);
+        waveform_buf = (short int*) calloc(1, (lSize/2));
         if(!waveform_buf) {
           fclose(file);
           fprintf(stdout, "Memory allocation failed\n");
           exit(-1);
         }
         size_t res;
-        res = fread(waveform_buf, 1, lSize, file);
-        printf("res: %d\n", res);
-        if(res != lSize){
+        res = fread(waveform_buf, 2, lSize, file);
+        printf("res: %ld\n", res);
+        printf("buf: %d %d\n", waveform_buf[0], waveform_buf[1]);
+        if(res != lSize/2){
           fclose(file);
           free(waveform_buf);
-          fprintf(stdout, "Failed to read file into buffer\n");
+          fprintf(stdout, "Failed to read file into buffer -- res: %ld, lSize: %ld\n", res, lSize);
           exit(-1);
         }
         if(strcmp(config.command,"ARB1") ||
@@ -215,12 +216,14 @@ static int parse_options(int argc, char *argv[])
         nn = sprintf(NULL, "%s", waveform_buf);
         */
         printf("wf: %d\n", wf);
-        printf("wf buffer size: %d\nwaveform_buf: %.2x\n", strlen(waveform_buf), (int)waveform_buf[2]);
+        printf("wf buffer size: %ld\nwaveform_buf: %x\n", sizeof(waveform_buf), waveform_buf[2]);
+      #if 0
         int kuk;
-        kuk = snprintf(NULL, 0, "%s", waveform_buf); /*Count chars in lSize*/
+        kuk = snprintf(NULL, 0, "%d", waveform_buf); /*Count chars in lSize*/
         printf("wfbuflen: %d\n",kuk);
-        fclose(file); /*Remember to free buffer when done*/
-
+      #endif
+        //fclose(file); /*Remember to free buffer when done*/
+        printf("closed file\n");
 				break;
 
 			case 'v':
@@ -343,13 +346,26 @@ printf("send_command\n");
     char * newBuff = (char*) calloc(1,lSize+strlen(config.command)+1+1); /* make room for LF and NULL*/
     strcpy(newBuff, config.command);
     strcat(newBuff, header);
-    strcat(newBuff, waveform_buf);
+    printf("starting conversion\n");
+    int c;
+    char temp[3];
+    /*Do some conversion bullshit*/
+    for(c=0; c<lSize/2; c++){
+      //itoa(waveform_buf[c], temp, 10);
+      //sprintf(&temp, "%d",waveform_buf[c]);
+      temp[0] = waveform_buf[c] >> 8;
+      temp[1] = waveform_buf[c]&0xFF;
+      temp[3] = '\0';
+//      printf("%s",temp);
+      strcat(newBuff, temp);
+    }
+//    strcat(newBuff, waveform_buf);
     strcat(newBuff, "\n");
     config.command = newBuff;
     printf("config.command size: %d\n", strlen(config.command));
-    free(waveform_buf);
+    //free(waveform_buf);
 //    free(newBuff);
-    printf("command:\n%s\n",config.command);
+//    printf("command:\n%s\n",config.command);
   }
 #if 0
 	/* Add string termination to command */
