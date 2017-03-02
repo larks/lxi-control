@@ -16,6 +16,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <getopt.h>
 #include <string.h>
 #include <fcntl.h>
@@ -45,6 +46,13 @@
 
 #define MODE_NORMAL	0
 #define MODE_DISCOVERY	1
+
+/*Waveform globals*/
+//char * waveform_buf;
+short int * waveform_buf;
+long lSize;
+FILE * file;
+bool wf = false;
 
 /* Configuration structure */
 static struct {
@@ -91,11 +99,14 @@ void print_help(void)
 	INFO("--help                Display help\n");
 	INFO("\n");
 }
-
 static int parse_options(int argc, char *argv[])
 {
 	static int c;
-
+  /* // These are now globals
+  unsigned char * waveform_buf;
+  long lSize;
+  FILE * file;
+  */
 	/* Print usage help if no arguments */
 	if (argc == 1)
 	{
@@ -110,6 +121,7 @@ static int parse_options(int argc, char *argv[])
 			{"ip",		required_argument,	0, 'i'},
 			{"port",	required_argument,	0, 'p'},
 			{"scpi",	required_argument,	0, 's'},
+			{"file",	required_argument,	0, 'f'},
 			{"timeout",	no_argument,		0, 't'},
 			{"discover",	no_argument,		0, 'd'},
 			{"version",	no_argument,		0, 'v'},
@@ -149,6 +161,66 @@ static int parse_options(int argc, char *argv[])
 
 			case 's':
 				config.command = optarg;
+        //int t;
+        //if(t=strcmp(optarg, "*IDN?") == 0) fprintf(stdout, "Read ID:\n");
+        //fprintf(stdout, "optarg: %s strcmp: %d\n", optarg, t);
+        /*
+        char * yo;
+        int n;
+        long int siz = 1234;
+        yo = calloc(1, 30);
+        //strcpy(yo, lSize);
+        n = sprintf(yo, "%ld", siz);
+        fprintf(stdout, "tall: %s, er bestaar av tegn: %d\n", yo, n);
+        */
+				break;
+			
+      case 'f':
+        printf("file: %s\n", optarg);
+				file = fopen(optarg, "rb");
+        if (!file){
+          fprintf(stdout, "Error opening file %s\n", optarg);
+          exit(1);
+        }
+        
+        fseek(file, 0L, SEEK_END);
+        lSize = ftell(file);
+        rewind(file);
+        printf("waveform size: %ld\n", lSize);
+
+        waveform_buf = (char*) calloc(1, lSize+1);
+        if(!waveform_buf) {
+          fclose(file);
+          fprintf(stdout, "Memory allocation failed\n");
+          exit(-1);
+        }
+        size_t res;
+        res = fread(waveform_buf, 1, lSize, file);
+        printf("res: %d\n", res);
+        if(res != lSize){
+          fclose(file);
+          free(waveform_buf);
+          fprintf(stdout, "Failed to read file into buffer\n");
+          exit(-1);
+        }
+        if(strcmp(config.command,"ARB1") ||
+           strcmp(config.command,"ARB2") ||
+           strcmp(config.command,"ARB3") ||
+           strcmp(config.command,"ARB4") ){
+          /* We want to define waveform */
+          wf=true;
+        }
+        /*
+        int nn;
+        nn = sprintf(NULL, "%s", waveform_buf);
+        */
+        printf("wf: %d\n", wf);
+        printf("wf buffer size: %d\nwaveform_buf: %.2x\n", strlen(waveform_buf), (int)waveform_buf[2]);
+        int kuk;
+        kuk = snprintf(NULL, 0, "%s", waveform_buf); /*Count chars in lSize*/
+        printf("wfbuflen: %d\n",kuk);
+        fclose(file); /*Remember to free buffer when done*/
+
 				break;
 
 			case 'v':
@@ -253,10 +325,36 @@ static int connect_instrument(void)
 static int send_command(void)
 {
 	int retval = 0;
-	
+printf("send_command\n");
+  if(!wf){
+    char * newBuff = (char*) calloc(1,strlen(config.command)+1+1); /* make room for one LF and one NULL*/
+    strcpy(newBuff, config.command);
+    strcat(newBuff, "\n");
+    config.command = newBuff;
+  } else {
+    printf("else\n");
+    int h_num; /* Storing number of chars in the size */
+    int h_size;
+    h_num = snprintf(NULL, 0, "%ld", lSize); /*Count chars in lSize*/
+    printf("h_num: %d\n", h_num);
+    char * header = (char *) calloc(1, 3+h_num+1); /* <space>+#+number of chars to follow + h_num + 0 */
+    h_size = sprintf(header, " #%d%ld", h_num, lSize); /*Assemble header, space between command and data is defined here*/
+    printf("h_size: %d, header: %s\n", h_size, header);
+    char * newBuff = (char*) calloc(1,lSize+strlen(config.command)+1+1); /* make room for LF and NULL*/
+    strcpy(newBuff, config.command);
+    strcat(newBuff, header);
+    strcat(newBuff, waveform_buf);
+    strcat(newBuff, "\n");
+    config.command = newBuff;
+    printf("config.command size: %d\n", strlen(config.command));
+    free(waveform_buf);
+//    free(newBuff);
+    printf("command:\n%s\n",config.command);
+  }
+#if 0
 	/* Add string termination to command */
 	config.command[strlen(config.command)] = 0;
-	
+#endif
 	/* Send SCPI command */
 	retval = send(config.socket,config.command,strlen(config.command)+1,0);
 	if (retval == ERR)
@@ -270,7 +368,7 @@ static int send_command(void)
 
 static int receive_response(void)
 {
-	char buffer[500];
+	char buffer[189500];
 	int length;
 	int i, question = 0;
 	fd_set rset;
@@ -331,7 +429,7 @@ static int discover_instruments(void)
 	struct in_addr ip_list[NET_MAX_NODES];
 	int i = 0;
 	int j = 0;
-	char idn_command[] = "*IDN?";
+	char idn_command[] = "*IDN?\n";
 
 	INFO("\nDiscovering LXI devices on hosts subnet - please wait...\n");
 
