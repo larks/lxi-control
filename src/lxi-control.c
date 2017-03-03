@@ -343,22 +343,31 @@ printf("send_command\n");
     char * header = (char *) calloc(1, 3+h_num+1); /* <space>+#+number of chars to follow + h_num + 0 */
     h_size = sprintf(header, " #%d%ld", h_num, lSize); /*Assemble header, space between command and data is defined here*/
     printf("h_size: %d, header: %s\n", h_size, header);
-    char * newBuff = (char*) calloc(1,lSize+strlen(config.command)+1+1); /* make room for LF and NULL*/
+    char * newBuff = (char*) calloc(1,h_size+lSize+strlen(config.command)+1+1); /* make room for LF and NULL*/
     strcpy(newBuff, config.command);
     strcat(newBuff, header);
+    printf("waveform_buf size: %d\n", sizeof(waveform_buf));
     printf("starting conversion\n");
     int c;
     char temp[3];
+    char * buff = (char*) calloc(buff, lSize+1);
     /*Do some conversion bullshit*/
     for(c=0; c<lSize/2; c++){
       //itoa(waveform_buf[c], temp, 10);
       //sprintf(&temp, "%d",waveform_buf[c]);
       temp[0] = waveform_buf[c] >> 8;
       temp[1] = waveform_buf[c]&0xFF;
+      //temp[0] = waveform_buf[c]&0xFF;
+      if(temp[0] == NULL && temp[1] == NULL){
+        printf("temp[0]: %c, temp[1]: %c\n", temp[0], temp[1]);
+      }
+      //temp[1] = waveform_buf[c]>>8;
       temp[3] = '\0';
 //      printf("%s",temp);
       strcat(newBuff, temp);
+      strcat(buff, temp);
     }
+    printf("buff length: %ld", strlen(buff));
 //    strcat(newBuff, waveform_buf);
     strcat(newBuff, "\n");
     config.command = newBuff;
