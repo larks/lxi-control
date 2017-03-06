@@ -27,6 +27,8 @@
 #include <arpa/inet.h>
 #include <sys/file.h>
 
+#include <stdint.h>
+
 /* Application configuration */
 #define APP_VERSION		"1.0.0"
 #define NET_NODELAY	1	// TCP nodelay enabled
@@ -49,7 +51,11 @@
 
 /*Waveform globals*/
 //char * waveform_buf;
-short int * waveform_buf;
+uint8_t * w_buf;
+int32_t * waveform_buf;
+//int16_t * waveform_buf;
+int32_t * net_wave_buf;
+int16_t * another_buf;
 long lSize;
 FILE * file;
 bool wf = false;
@@ -188,22 +194,90 @@ static int parse_options(int argc, char *argv[])
         rewind(file);
         printf("waveform size: %ld\n", lSize);
 
-        waveform_buf = (short int*) calloc(1, (lSize/2));
+        waveform_buf = (int32_t*) calloc((lSize/4), sizeof(int32_t));
+        w_buf = (int8_t*) calloc(lSize, sizeof(int8_t));
         if(!waveform_buf) {
           fclose(file);
           fprintf(stdout, "Memory allocation failed\n");
           exit(-1);
         }
         size_t res;
-        res = fread(waveform_buf, 2, lSize, file);
+   //     printf("siesoso: %d\n",sizeof(uint32_t));
+//        res = fread(waveform_buf, sizeof(uint32_t), lSize, file); // lSize:num_bytes
+        res = fread(waveform_buf, 1, lSize, file); // lSize:num_bytes
+        printf("waveform_buf:\n");
         printf("res: %ld\n", res);
         printf("buf: %d %d\n", waveform_buf[0], waveform_buf[1]);
-        if(res != lSize/2){
+        printf("buf: 0x%x 0x%x\n", waveform_buf[0], waveform_buf[1]);
+        if(res != lSize){
           fclose(file);
           free(waveform_buf);
           fprintf(stdout, "Failed to read file into buffer -- res: %ld, lSize: %ld\n", res, lSize);
           exit(-1);
         }
+        /* 8bit */
+        rewind(file);
+        res = fread(w_buf, sizeof(int8_t), lSize, file); // lSize:num_bytes
+        printf("w_buf:\n");
+        printf("res: %ld\n", res);
+        printf("buf: %d %d\n", w_buf[0], w_buf[1]);
+        printf("buf: 0x%x 0x%x 0x%x\n", w_buf[0], w_buf[1], w_buf[2]);
+        if(res != lSize){
+          fclose(file);
+          free(w_buf);
+          fprintf(stdout, "Failed to read file into buffer -- res: %ld, lSize: %ld\n", res, lSize);
+          exit(-1);
+        }
+
+        /* 16bit */
+        another_buf = (int16_t*) calloc((lSize/2), sizeof(int16_t));
+        rewind(file);
+        res = fread(another_buf, sizeof(int16_t), lSize, file); // lSize:num_bytes
+        printf("another_buf:\n");
+        printf("res: %ld\n", res);
+        printf("buf: %i %i\n", another_buf[0]&0xffff, another_buf[1]&0xffff);
+        printf("buf: 0x%x 0x%x 0x%x\n", another_buf[0]&0xffff, another_buf[1]&0xffff, another_buf[2]&0xffff);
+        printf("buf3: 0x%x 0x%x 0x%x\n", another_buf[0]&0x7fff, another_buf[1]&0x7fff, another_buf[2]&0x7fff);
+        printf("buf4: 0x%x 0x%x 0x%x\n", (another_buf[0]+8192)&0x7fff, (another_buf[1]+8192)&0x7fff, (another_buf[2]+8192)&0x7fff);
+        printf("buf5: 0x%x 0x%x 0x%x\n", (another_buf[0]&0x7fff)+8192, (another_buf[1]&0x7fff)+8192, (another_buf[2]&0x7fff)+8192);
+        printf("buf6: 0x%x 0x%x 0x%x\n", another_buf[1024], another_buf[1025], another_buf[1026]);
+        printf("buf6: 0x%x 0x%x 0x%x\n", (another_buf[1024]+8192)&0x7fff, (another_buf[1025]+8192)&0x7fff, (another_buf[1026]+8192)&0x7fff);
+        printf("buf7: 0x%x 0x%x 0x%x\n", (another_buf[1024]&0x7fff)+8192, (another_buf[1025]&0x7fff)+8192, (another_buf[1026]&0x7fff)+8192);
+        if(res != lSize/2){
+          fclose(file);
+          free(another_buf);
+          fprintf(stdout, "Failed to read file into buffer -- res: %ld, lSize: %ld\n", res, lSize);
+          exit(-1);
+        }
+        /* Have to hack the shitty output of TTi's waveform editor */
+        int i;
+        int32_t temp;
+        for(i=0; i<lSize/2; i++){
+          /* Amplitude goes from -8192 to +8192, but -8192 is 0 in the generator
+           * only the 14 LSB bits are used.
+           * */
+          temp = (another_buf[i] + 8192)&0x7fff; 
+          another_buf[i] = (uint16_t)temp;
+        }
+
+        //exit(0);
+        #if 0
+        net_wave_buf = (int32_t*) calloc((lSize/4), sizeof(int32_t));
+        int i;
+        int j = 0;
+        uint32_t temp;
+        for(i=0; i<lSize/4; i++,j+=2){
+          //net_wave_buf[i] = htonl(waveform_buf[i]);
+          temp = another_buf[i] << 16;
+          temp |= another_buf[i+1] & 0xffff;
+          net_wave_buf[i] = htonl(temp);
+//          net_wave_buf[i] = temp;
+//          net_wave_buf[i] = htonl(waveform_buf[i]);
+//          printf("i: %d, j: %d \n", i, j);
+//          printf("temp: 0x%x, buf: 0x%x, wf_buf: 0x%x\n", temp, net_wave_buf[i], ntohl(waveform_buf[i]));
+        }
+        #endif
+//        exit(0); // testing
         if(strcmp(config.command,"ARB1") ||
            strcmp(config.command,"ARB2") ||
            strcmp(config.command,"ARB3") ||
@@ -217,11 +291,6 @@ static int parse_options(int argc, char *argv[])
         */
         printf("wf: %d\n", wf);
         printf("wf buffer size: %ld\nwaveform_buf: %x\n", sizeof(waveform_buf), waveform_buf[2]);
-      #if 0
-        int kuk;
-        kuk = snprintf(NULL, 0, "%d", waveform_buf); /*Count chars in lSize*/
-        printf("wfbuflen: %d\n",kuk);
-      #endif
         //fclose(file); /*Remember to free buffer when done*/
         printf("closed file\n");
 				break;
@@ -328,12 +397,45 @@ static int connect_instrument(void)
 static int send_command(void)
 {
 	int retval = 0;
-printf("send_command\n");
+  int c;
+  printf("send_command\n");
   if(!wf){
-    char * newBuff = (char*) calloc(1,strlen(config.command)+1+1); /* make room for one LF and one NULL*/
+  //#if 0
+    char * newBuff = (char*) calloc(1,strlen(config.command)+1+1); /* make room for one LF and NULL*/
     strcpy(newBuff, config.command);
     strcat(newBuff, "\n");
     config.command = newBuff;
+  //#endif
+  #if 0
+    int8_t * newBuff = (int8_t*) calloc(1,strlen(config.command)+1); /* make room for one LF and NULL*/
+    for(c = 0; c<strlen(config.command); c++){
+      newBuff[c] = config.command[c];
+      printf("c: %d, newBuff[c]: %c \n", c, newBuff[c]);
+    }
+    newBuff[c] = 0x0A;
+      printf("c: %d, newBuff[c]: %c \n", c, newBuff[c]);
+    char * new = (char*)newBuff;
+    printf("casted: %s\n", new);
+    int32_t * te = (int32_t *) calloc(1, (strlen(config.command)/4)+1);
+    for(c=0; c<4*strlen(config.command); c+=4){
+      int32_t temp;
+      temp = newBuff[c] | newBuff[c+1]<<8 | newBuff[c+2]<<16 | newBuff[c+3]<<24;
+      if(c>3){
+        te[c-4] = htonl(temp);
+      } else {
+        te[c] = htonl(temp);
+      }
+    }
+    #endif
+  	/* Send SCPI command */
+	  //retval = send(config.socket,&newBuff,strlen(config.command)+1,0);
+	  retval = send(config.socket,config.command,strlen(config.command),0);
+    printf("strlen: %d\n", strlen(config.command));
+	  if (retval == ERR) {
+		  ERROR("Error sending SCPI command\n");
+		  exit(3);
+	  }
+  // Waveform loading
   } else {
     printf("else\n");
     int h_num; /* Storing number of chars in the size */
@@ -343,11 +445,99 @@ printf("send_command\n");
     char * header = (char *) calloc(1, 3+h_num+1); /* <space>+#+number of chars to follow + h_num + 0 */
     h_size = sprintf(header, " #%d%ld", h_num, lSize); /*Assemble header, space between command and data is defined here*/
     printf("h_size: %d, header: %s\n", h_size, header);
-    char * newBuff = (char*) calloc(1,h_size+lSize+strlen(config.command)+1+1); /* make room for LF and NULL*/
+
+#if 0 // convert everything to uin8_t
+    /*Send command and header*/
+    uint8_t * nBuff = (uint8_t*) calloc(1,strlen(config.command)+strlen(header)+1); /* make room for LF(0x0A)*/
+//    strcpy(newBuff, config.command);
+//    strcat(newBuff, header);
+//    char LF[2] = {'\n','\0'};
+    //int c;
+    int cLength = strlen(config.command)+strlen(header)+lSize+1;
+    uint8_t * sCommand = (uint8_t*)calloc(1,cLength);
+    for(c = 0; c < cLength; c++){
+      if(c<strlen(config.command)){
+        sCommand[c] = config.command[c];
+      }
+      if(c>=strlen(config.command) && c<strlen(header)){
+        sCommand[c] = header[c];
+      }
+      if( (c>=(strlen(header)+strlen(config.command))) && 
+           c<cLength-1 ){
+        sCommand[c] = waveform_buf[c];
+      }
+      if(c==cLength-1){
+        printf("LF c: %d\n", c);
+        sCommand[c] = 0x0A; /* LF */
+      }
+    }
+    printf("end c: %d\n", c);
+    /* Send SCPI command */
+    retval = send(config.socket, sCommand, cLength, 0);
+    if (retval == ERR)
+    {
+      ERROR("Error sending SCPI command\n");
+      exit(3);
+    }   
+#endif
+
+//#if 0
+    char * newBuff = (char*) calloc(1,strlen(config.command)+1); /* make room for one NULL*/
     strcpy(newBuff, config.command);
-    strcat(newBuff, header);
-    printf("waveform_buf size: %d\n", sizeof(waveform_buf));
-    printf("starting conversion\n");
+    config.command = newBuff;
+    //printf("starting conversion\n");
+	  retval = send(config.socket,config.command,strlen(config.command),0);
+	  if (retval == ERR) {
+		  ERROR("Error sending SCPI command\n");
+		  exit(3);
+	  }
+    printf("command: %s, retval=%d\n", config.command, retval);
+    /* Send header */
+	  retval = send(config.socket,header,h_size,0);
+	  if (retval == ERR) {
+		  ERROR("Error sending SCPI command\n");
+		  exit(3);
+	  }
+    printf("header:%s, retval=%d, h_size=%d\n", header, retval, h_size);
+
+    /*Send bytes*/
+    printf("sizeof(waveform_buf) size: %d, lSize: %ld\n", sizeof(waveform_buf), lSize);
+    printf("sizeof(uint32_t): %d\n", sizeof(uint32_t));
+    printf("sizeof(uint32_t)*lSize: %d\n", sizeof(uint32_t)*lSize);
+	 // retval = send(config.socket,waveform_buf,sizeof(uint32_t)*lSize/4,0);
+	  //retval = send(config.socket,net_wave_buf,lSize,0);
+    //
+
+    int16_t * test = (int16_t*)calloc(lSize/2, sizeof(int16_t));
+    int g;
+    int16_t temp;
+    for(g=0; g<lSize/2; g++){
+      temp = (another_buf[g]<<8)&0xff00;
+      temp |= (another_buf[g]>>8)&0xff;
+      another_buf[g]=temp;
+    }
+
+	  retval = send(config.socket,another_buf,lSize,0);
+//	  retval = send(config.socket,net_wave_buf,lSize,0);
+//	  retval = send(config.socket,w_buf,lSize,0);
+	  if (retval == ERR) {
+      printf("Error\n");
+		  ERROR("Error sending SCPI command\n");
+		  exit(3);
+	  }
+    printf("waveform_buf: retval=%d\n", retval);
+
+    /*Send LF*/
+    char LF[2] = {'\n','\0'};
+	  retval = send(config.socket,LF,strlen(LF),0);
+	  if (retval == ERR) {
+		  ERROR("Error sending SCPI command\n");
+		  exit(3);
+	  }
+    printf("LF: %s, retval=%d\n", LF, retval);
+
+//#endif
+#if 0
     int c;
     char temp[3];
     char * buff = (char*) calloc(buff, lSize+1);
@@ -375,19 +565,21 @@ printf("send_command\n");
     //free(waveform_buf);
 //    free(newBuff);
 //    printf("command:\n%s\n",config.command);
+#endif
   }
 #if 0
 	/* Add string termination to command */
 	config.command[strlen(config.command)] = 0;
 #endif
-	/* Send SCPI command */
+	#if 0
+  /* Send SCPI command */
 	retval = send(config.socket,config.command,strlen(config.command)+1,0);
 	if (retval == ERR)
 	{
 		ERROR("Error sending SCPI command\n");
 		exit(3);
 	}
-
+  #endif
 	return retval;
 }
 
@@ -426,7 +618,7 @@ static int receive_response(void)
 	}
 
 	/* Read response */
-	if((length=recv(config.socket,&buffer[0],200,0))==ERR)
+	if((length=recv(config.socket,&buffer[0],189500,0))==ERR)
 	{
 		ERROR("Error reading response: %s\n",strerror(errno));
 		exit(3);
