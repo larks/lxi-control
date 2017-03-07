@@ -8,6 +8,9 @@
  *
  * Copyright 2009 DoréDevelopment
  *
+ * Modified: Lars Bratrud (lars.bratrud@cern.ch), 2017
+ * Added support for controlling TTi TG5011 Function Generator
+ *
  * This program is free software; you can redistribute  it and/or modify it
  * under  the terms of  the GNU General  Public License as published by the
  * Free Software Foundation;  either version 2 of the  License, or (at your
@@ -31,7 +34,7 @@
 #include <unistd.h> // implicit decl of close 
 
 /* Application configuration */
-#define APP_VERSION		"1.0.0"
+#define APP_VERSION		"1.1.0"
 #define NET_NODELAY	1	// TCP nodelay enabled
 #define NET_TIMEOUT	4	// Network timeout in seconds (default)
 #define NET_MAX_NODES	256
@@ -243,6 +246,8 @@ static int parse_options(int argc, char *argv[])
           fclose(file);
           free(waveform_buf);
           printf("Could not read header in file %s, read %ld bytes\n", optarg, res*2);
+        } else {
+          fileAmp<0?fileAmp*=-1:fileAmp; // abs(fileAmp)
         }
         
         /* Read waveform data and store in buffer */
@@ -268,14 +273,22 @@ static int parse_options(int argc, char *argv[])
           }
           /* Have to hack the shitty output of TTi's waveform editor */
           int i;
-          int32_t temp;
+          uint16_t temp;
+          double fTemp;
           for(i=0; i<lSize/2; i++){
             /* Amplitude goes from -8192 to +8192, but -8192 is 0 in the generator
              * only the 14 LSB bits are used.
              * */
-            temp = ((waveform_buf[i]/waveAmplitude)*genAmplitude + genAmplitude)&0x7fff; 
-            waveform_buf[i] = (uint16_t)temp;
+            fTemp = (double) waveform_buf[i] / (double) waveAmplitude;
+            fTemp *= genAmplitude;
+            (fTemp >= 0) ? (fTemp+=0.5) : (fTemp-=0.5); // Rounding
+            fTemp += genAmplitude;
+//            printf("%f ",fTemp);
+            //printf("%d ",(int16_t)fTemp);
+            temp = (uint16_t) fTemp;
+            waveform_buf[i] = temp & 0x7fff;
           }
+//          exit(0);
         }
         /* Check to see if the command is correct */
         if(strcmp(config.command,"ARB1") ||
