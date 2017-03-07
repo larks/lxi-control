@@ -53,7 +53,8 @@
 #define MODE_NORMAL	0
 #define MODE_DISCOVERY	1
 
-bool debug = true;
+//bool debug = true;
+bool debug = false;
 
 /*Waveform globals*/
 int16_t * waveform_buf;
@@ -654,7 +655,6 @@ int hostname_to_ip(char *hostname , char *ip)
     for(p = servinfo; p != NULL; p = p->ai_next) 
     {
         h = (struct sockaddr_in *) p->ai_addr;
-				printf("BallE: %s\n", inet_ntoa(h->sin_addr) );
         //strcpy(ip , inet_ntoa( h->sin_addr ) );
 				memcpy(ip, inet_ntoa(h->sin_addr), strlen(inet_ntoa(h->sin_addr)));
     }
