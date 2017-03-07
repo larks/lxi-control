@@ -26,9 +26,9 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <sys/file.h>
-
+#include <netdb.h> // hostent
 #include <stdint.h>
-#include <unistd.h> /* implicit decl of close */
+#include <unistd.h> // implicit decl of close 
 
 /* Application configuration */
 #define APP_VERSION		"1.0.0"
@@ -87,6 +87,8 @@ char rpc_GETPORT_msg[] = {
 
 /*----------------------------------------------------------------------------*/
 
+int hostname_to_ip(char *  , char *);
+
 void print_help(void)
 {
 	INFO("Usage: lxi-control [options]\n");
@@ -118,6 +120,7 @@ static int parse_options(int argc, char *argv[])
 		static struct option long_options[] =
 		{
 			{"ip",		required_argument,	0, 'i'},
+			{"host",		required_argument,	0, 'n'},
 			{"port",	required_argument,	0, 'p'},
 			{"scpi",	required_argument,	0, 's'},
 			{"file",	required_argument,	0, 'f'},
@@ -150,18 +153,36 @@ static int parse_options(int argc, char *argv[])
 				INFO("\n");
 				break;
 			
+      /* Define IP */
 			case 'i':
 				config.ip = optarg;
 				break;
+			
+      /* Get IP from hostname */
+      case 'n':
+        {};
+        char test[100];
+        if(hostname_to_ip(optarg, test)!=0){
+          printf("Could not resolve %s, exiting...\n", optarg);
+          exit(1);
+        } else {
+					config.ip = test;
+          //strcpy(config.ip, test);
+          printf("Resolved %s to ip %s\n",optarg, config.ip);
+        }
+				break;
 
+      /* Configure port number */
 			case 'p':
 				config.port = atoi(optarg);
 				break;
 
+      /* Set command */
 			case 's':
 				config.command = optarg;
 				break;
 			
+      /* Read waveform file  */
       case 'f':
         if(debug) printf("file: %s\n", optarg);
 				file = fopen(optarg, "rb");
@@ -319,7 +340,7 @@ static int send_command(void)
     strcpy(newBuff, config.command);
     strcat(newBuff, "\n");
     config.command = newBuff;
-    free(newBuff);
+//    free(newBuff);
   	/* Send SCPI command */
 	  retval = send(config.socket,config.command,strlen(config.command),0);
     if(debug) printf("strlen: %ld\n", strlen(config.command));
@@ -362,7 +383,7 @@ static int send_command(void)
     if(debug) printf("sizeof(uint32_t): %ld\n", sizeof(uint32_t));
     if(debug) printf("sizeof(uint32_t)*lSize: %ld\n", sizeof(uint32_t)*lSize);
 	 // retval = send(config.socket,waveform_buf,sizeof(uint32_t)*lSize/4,0);
-	  //retval = send(config.socket,net_wave_buf,lSize,0);
+	  //retval = send(config.socket,et_wave_buf,lSize,0);
 
     /*Convert to network order*/
     int g;
@@ -540,6 +561,38 @@ static int discover_instruments(void)
 	return 0;
 }
 
+int hostname_to_ip(char *hostname , char *ip)
+{
+    int sockfd;  
+    struct addrinfo hints, *servinfo, *p;
+    struct sockaddr_in *h;
+    int rv;
+ 
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET;//AF_UNSPEC; // use AF_INET6 to force IPv6
+    hints.ai_socktype = SOCK_STREAM;
+ 
+    if ( (rv = getaddrinfo( hostname , NULL , &hints , &servinfo)) != 0) 
+    {
+        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+        return 1;
+    }
+ 
+    // loop through all the results and connect to the first we can
+    for(p = servinfo; p != NULL; p = p->ai_next) 
+    {
+        h = (struct sockaddr_in *) p->ai_addr;
+				printf("BallE: %s\n", inet_ntoa(h->sin_addr) );
+        //strcpy(ip , inet_ntoa( h->sin_addr ) );
+				memcpy(ip, inet_ntoa(h->sin_addr), strlen(inet_ntoa(h->sin_addr)));
+    }
+     
+    freeaddrinfo(servinfo); // all done with this structure
+    return 0;
+}
+
+
+/* MAIN */
 int main (int argc, char *argv[])
 {
 	/* Parse command line options */
