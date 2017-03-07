@@ -1,5 +1,5 @@
 # Notes on TTi TG5011 waveforms
-The device can store up to x arbitrary waveforms in its internal memory of size y, or 1000 waveforms on an external USB drive.
+The device can store up to 4 arbitrary waveforms in its internal memory of 128k points, or 1000 waveforms on an external USB drive.
 ## TTi Waveform Manager Plus
 TTi provides a waveform manager which should help you create waveforms.
 The waveform editor has its own internal waveform format where the amplitude is always set to 32768.
