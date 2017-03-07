@@ -57,6 +57,12 @@ int16_t * waveform_buf;
 long lSize;
 FILE * file;
 bool wf = false;
+bool fitWaveform = false;
+int waveAmplitude; // Default from Waveform Manager
+int genAmplitude = 8192; // Function generator peak amplitude
+int fileAmp=0;
+int customAmp=0; // Function generator peak amplitude
+bool usingCustomAmp = false;
 
 /* Configuration structure */
 static struct {
@@ -94,15 +100,20 @@ void print_help(void)
 	INFO("Usage: lxi-control [options]\n");
 	INFO("\n");
 	INFO("Options:\n");
-	INFO("--ip       <ip>       Remote device IP\n");
-	INFO("--port     <port>     Remote device port (default: %d)\n",
+	INFO("--ip,i       <ip>           Remote device IP\n");
+	INFO("--host,n     <host name>    Remote device host name\n");
+	INFO("--port,p     <port>         Remote device port (default: %d)\n",
 								config.port);
-	INFO("--scpi     <command>  SCPI command\n");
-	INFO("--timeout  <seconds>  Network timeout (default: %d s)\n",
+	INFO("--scpi,s     <command>      SCPI command\n");
+	INFO("--file,f     <filename>     Waveform filename\n");
+	INFO("--adjust,a   <amp>          Adjust waveform to fit original peak amplitude <amp> \n"
+       "                            to function generator max peak amplitude of 8192 counts.\n"
+       "                            Default value is read from first 2 bytes of .wfm file\n");
+	INFO("--timeout,t  <seconds>      Network timeout (default: %d s)\n",
 								config.timeout);
-	INFO("--discover            Discover LXI devices on hosts subnet\n");
-	INFO("--version             Display version\n");
-	INFO("--help                Display help\n");
+	INFO("--discover,d                Discover LXI devices on hosts subnet\n");
+	INFO("--version,v                 Display version\n");
+	INFO("--help,h                    Display help\n");
 	INFO("\n");
 }
 static int parse_options(int argc, char *argv[])
@@ -119,15 +130,16 @@ static int parse_options(int argc, char *argv[])
 	{
 		static struct option long_options[] =
 		{
-			{"ip",		required_argument,	0, 'i'},
+			{"ip",		  required_argument,	0, 'i'},
 			{"host",		required_argument,	0, 'n'},
-			{"port",	required_argument,	0, 'p'},
-			{"scpi",	required_argument,	0, 's'},
-			{"file",	required_argument,	0, 'f'},
-			{"timeout",	no_argument,		0, 't'},
-			{"discover",	no_argument,		0, 'd'},
-			{"version",	no_argument,		0, 'v'},
-			{"help",	no_argument,		0, 'h'},
+			{"port",	  required_argument,	0, 'p'},
+			{"scpi",	  required_argument,	0, 's'},
+			{"file",	  required_argument,	0, 'f'},
+			{"adjust",	optional_argument,	0, 'a'},
+			{"timeout",	no_argument,		    0, 't'},
+			{"discover",no_argument,		    0, 'd'},
+			{"version",	no_argument,		    0, 'v'},
+			{"help",	  no_argument,		    0, 'h'},
 			{0, 0, 0, 0}
 		};
 		
@@ -135,7 +147,8 @@ static int parse_options(int argc, char *argv[])
 		int option_index = 0;
 
 		/* Parse argument using getopt_long (no short opts allowed) */
-		c = getopt_long (argc, argv, "", long_options, &option_index);
+		c = getopt_long (argc, argv, "inpsfatdvh", long_options, &option_index);
+		//c = getopt_long (argc, argv, "i:n:p:s:f:a:t:d:v:h:", long_options, &option_index);
 
 		/* Detect the end of the options. */
 		if (c == -1)
@@ -181,7 +194,31 @@ static int parse_options(int argc, char *argv[])
 			case 's':
 				config.command = optarg;
 				break;
-			
+			/* fit */
+      case 'a':
+        fitWaveform = true;
+        if(optarg) {
+          customAmp = (int)atoi(optarg);
+          if(customAmp==0) {
+            printf("Zero amplitude is impossible, exiting...\n");
+            exit(1);
+          }
+          usingCustomAmp = true;
+          if(debug) printf("customAmp: %d\n",customAmp);
+        } else {
+          usingCustomAmp = false;
+        }
+        
+        if(debug) { 
+          printf("Amplitude: ");
+          if(optarg) {
+            printf("%d\n",customAmp);
+          } else {
+            printf("not set\n");
+          }
+        }
+        break;
+
       /* Read waveform file  */
       case 'f':
         if(debug) printf("file: %s\n", optarg);
@@ -192,7 +229,7 @@ static int parse_options(int argc, char *argv[])
         }
         
         fseek(file, 0L, SEEK_END);
-        lSize = ftell(file);
+        lSize = ftell(file)-2; // Account for .wfm header
         rewind(file);
         if(debug) printf("waveform size: %ld\n", lSize);
         
@@ -200,6 +237,15 @@ static int parse_options(int argc, char *argv[])
         size_t res;
         waveform_buf = (int16_t*) calloc((lSize/2), sizeof(int16_t));
         rewind(file);
+        /* Read waveform max peak amplitude from file  */
+        res = fread(&fileAmp, sizeof(int16_t), 1, file); // Read wfm header
+        if(res != 1){
+          fclose(file);
+          free(waveform_buf);
+          printf("Could not read header in file %s, read %ld bytes\n", optarg, res*2);
+        }
+        
+        /* Read waveform data and store in buffer */
         res = fread(waveform_buf, sizeof(int16_t), lSize, file); // lSize:num_bytes
         if(res != lSize/2){
           fclose(file);
@@ -210,23 +256,37 @@ static int parse_options(int argc, char *argv[])
           fclose(file);
           printf("File %s successfully opened, waveform size is %ld points\n", optarg, lSize/2);
         }
-        /* Have to hack the shitty output of TTi's waveform editor */
-        int i;
-        int32_t temp;
-        for(i=0; i<lSize/2; i++){
-          /* Amplitude goes from -8192 to +8192, but -8192 is 0 in the generator
-           * only the 14 LSB bits are used.
-           * */
-          temp = (waveform_buf[i] + 8192)&0x7fff; 
-          waveform_buf[i] = (uint16_t)temp;
+        
+        /* Normalize and fit the waveform */
+        if(fitWaveform){
+          if(usingCustomAmp){
+            waveAmplitude = customAmp;
+            if(debug) printf("using custom amp: %d, waveamp: %d\n", customAmp, waveAmplitude);
+          } else {
+            waveAmplitude = fileAmp;
+            if(debug) printf("using amp read from file: %d, waveamp: %d\n", fileAmp, waveAmplitude);
+          }
+          /* Have to hack the shitty output of TTi's waveform editor */
+          int i;
+          int32_t temp;
+          for(i=0; i<lSize/2; i++){
+            /* Amplitude goes from -8192 to +8192, but -8192 is 0 in the generator
+             * only the 14 LSB bits are used.
+             * */
+            temp = ((waveform_buf[i]/waveAmplitude)*genAmplitude + genAmplitude)&0x7fff; 
+            waveform_buf[i] = (uint16_t)temp;
+          }
         }
-
+        /* Check to see if the command is correct */
         if(strcmp(config.command,"ARB1") ||
            strcmp(config.command,"ARB2") ||
            strcmp(config.command,"ARB3") ||
            strcmp(config.command,"ARB4") ){
           /* We want to define waveform */
           wf=true;
+        } else {
+          printf("File defined but command is not ARBx <bin>, no waveform will be loaded to the function generator\n");
+          wf=false;
         }
 				break;
 
@@ -243,11 +303,10 @@ static int parse_options(int argc, char *argv[])
 				print_help();
 				exit(0);
 				break;
-
-			case '?':
+			
+      case '?':
 				/* getopt_long already printed an error message. */
 				break;
-
 			default:
 				ERROR("End of options\n");
 				exit(1);
@@ -560,7 +619,7 @@ static int discover_instruments(void)
 
 	return 0;
 }
-
+/* http://www.binarytides.com/hostname-to-ip-address-c-sockets-linux/ */
 int hostname_to_ip(char *hostname , char *ip)
 {
     int sockfd;  
