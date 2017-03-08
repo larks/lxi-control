@@ -237,7 +237,7 @@ static int parse_options(int argc, char *argv[])
             strncmp(config.command,"ARB3",4)==0 ||
             strncmp(config.command,"ARB4",4)==0) 
             ){
-          if(debug) printf("ARBx start, strlen:%d, command: %s, last char: %c\n", strlen(config.command), config.command, config.command[strlen(config.command)-1]);
+          if(debug) printf("ARBx start, strlen:%ld, command: %s, last char: %c\n", strlen(config.command), config.command, config.command[strlen(config.command)-1]);
           /* ARBx?  */
           if( (strlen(config.command) == 5) && config.command[strlen(config.command)-1] == '?' ){
             /* We want to fetch waveform */
@@ -329,7 +329,7 @@ static int parse_options(int argc, char *argv[])
          } else {
             printf("File defined but command is not ARBx <bin>, no waveform will be loaded to the function generator\n");
             wf=false;
-            printf("strlen: %d\n", strlen(config.command));
+            printf("strlen: %ld\n", strlen(config.command));
          }
       } else {
         printf("Command not recognized: %s\n", config.command);
@@ -520,7 +520,7 @@ static int send_command(void)
 	return retval;
 }
 
-static int receive_response(void)
+static int receive_response(char ** response)
 {
 	char buffer[189500];
 	int length;
@@ -553,87 +553,22 @@ static int receive_response(void)
 		INFO("Timeout waiting for response\n");
 		exit(2);
 	}
-
-  if(getWaveData){
-    if(debug) printf("getWaveData true\n");
-    int16_t * read_buf;
-    int nChars;
-    long size;
-    char * header;
-    header = (char*)calloc(2+1, sizeof(char));
-    /* Read response (#<number of chars to follow>*/
-  	if((length=recv(config.socket,header,2,0))==ERR) {
-		  ERROR("Error reading response: %s\n",strerror(errno));
-  		exit(3);
-	  } 
-    if(debug) printf("buffer: %s, length: %ld\n", header, strlen(header) );
-    if(strncmp(header, "#x", 1) == 0){
-      if(debug) printf("nChars: ddd%d\n", *(header+1)-'0');
-        nChars = *(header+1)-'0';
-        if(debug) printf("nChars: %d\n", nChars);
-        free(header);
-//        exit(0);
-    } else {
-      free(header);
-      ERROR("Header not correct: %s\n", buffer);
-      return 1;
-    }
-    /* Read <number of bytes to follow>*/
-    header = calloc(nChars, sizeof(char));
-  	if((length=recv(config.socket,header,nChars,0))==ERR) {
-      free(header);
-		  ERROR("Error reading response: %s\n",strerror(errno));
-  		exit(3);
-	  } 
-    size = (long) atoi(header);
-    if(debug) printf("size: %ld\n", size);
-    free(header);
-//    exit(0);
-    /* Read data*/
-    read_buf = (int16_t*) calloc((size/2), sizeof(int16_t));
-  	if((length=recv(config.socket,read_buf,size,0))==ERR) {
-		  ERROR("Error reading response: %s\n",strerror(errno));
-  		exit(3);
-	  }
-    int i;
-    for(i=0; i<size/2; i++) read_buf[i] = ntohs(read_buf[i]);
-    /* Open file for writing */
-    outFile = fopen(fileNameOut, "wb");
-    if (outFile == NULL){
-      fclose(outFile);
-      fprintf(stdout, "Error opening file %s, errno: %s\n", fileNameOut, strerror(errno));
-      exit(1);
-    } else {
-       printf("Opened file %s for writing data from function generator\n", fileNameOut);
-    }   
-    int res;
-    res = fwrite(read_buf, sizeof(int16_t), size/2, outFile);
-    if(res != size/2){
-      fclose(outFile);
-      free(read_buf);
-      printf("Could not write to file, wrote %ld bytes\n", res*2);
-      exit(0);
-    } 
-    printf("Wrote data to file\n");
-    free(read_buf);
-    fclose(outFile);
-    return 0;    
-  } else {
-    /* Read response */
-    if((length=recv(config.socket,&buffer[0],189500,0))==ERR)
-    {
-      ERROR("Error reading response: %s\n",strerror(errno));
-      exit(3);
-    }
-    
-    /* Add zero character (C string) */
-    buffer[length]=0; 
-    
-    /* Print received data */
-    printf("%s",buffer);
-    
-    return 0;
+  /* Read response */
+  if((length=recv(config.socket,&buffer[0],189500,0))==ERR)
+  {
+    ERROR("Error reading response: %s\n",strerror(errno));
+    exit(3);
   }
+  
+  /* Add zero character (C string) */
+  buffer[length]=0;
+  //response = calloc(length, sizeof(char));
+  *response = *&buffer;
+  //memcpy(response, buffer, length);
+  /* Print received data */
+  printf("%s",buffer);
+  
+  return 0;
 }
 
 static int discover_instruments(void)
@@ -722,7 +657,7 @@ static int discover_instruments(void)
 			
 			INFO("IP %s  -  ", config.ip);
 			
-			receive_response();
+			receive_response(NULL);
 		
 			disconnect_instrument();
 		}
@@ -732,6 +667,131 @@ static int discover_instruments(void)
 
 	return 0;
 }
+
+static int receive_waveform(int nBytes)
+{
+	int i, question = 0;
+	fd_set rset;
+	int ret;
+  long length;
+	struct timespec t;
+  int h_num = snprintf(NULL, 0, "%d", nBytes); /*Count chars in nBytes*/
+  int totalBytes = 1+1+h_num+nBytes; /* #+N+nBytes+data */
+  int bytesLeft = totalBytes;
+	/* Skip receive if no '?' in command */
+	for (i=0; i<strlen(config.command);i++)
+	{
+		if (config.command[i] == '?')
+			question=1;
+	}
+	if (question == 0)
+		return 0;
+
+	/* The device do not return any data if command send is wrong. If no
+	 * data recived until the specified timeout, exit. */	
+	FD_ZERO(&rset);
+	FD_SET(config.socket, &rset);
+	t.tv_sec=config.timeout; t.tv_nsec=0;
+	ret=pselect(config.socket+1, &rset, NULL, NULL, &t, NULL);
+	if(ret == -1) {
+		ERROR("Error reading response: %s\n",strerror(errno));
+		exit(3);
+	}
+
+	if(!ret) {
+		INFO("Timeout waiting for response\n");
+		exit(2);
+	}
+
+    uint16_t * read_buf;
+    int bytesRead=0; 
+    /* Read data
+     * Has to be read 1426 bytes at a time, first frame is 14267+header
+     * */
+    //read_buf = (int16_t*) calloc((size/2), sizeof(int16_t));
+    read_buf = (uint16_t*) calloc(totalBytes, sizeof(uint8_t));
+#if 0
+  int bytes=0;
+  int i;
+  int bytesLeft=size;
+  length=0;
+  printf("Read data: size=%ld\n", size);
+  for(bytes=0; bytes<totalBytes; bytes+=length){
+    if(bytesLeft>1426){
+      if((length=recv(config.socket,read_buf,1426,0))==ERR) {
+        ERROR("Error reading response: %s\n",strerror(errno));
+        exit(3);
+      }
+      printf("length: %d\n", length);
+      //for(i=bytes; i<((int)(bytes+length)); i++) read_buf[i] = ntohs(read_buf[i]);
+      bytesLeft-=length;
+    /* Rest of data */
+    } else {
+       if((length=recv(config.socket,read_buf,bytesLeft,0))==ERR) {
+        ERROR("Error reading response: %s\n",strerror(errno));
+        exit(3);
+      }
+      printf("length: %d\n", length);
+      //for(i=bytes; i<((int)(bytes+length)); i++) read_buf[i] = ntohs(read_buf[i]);
+    }
+  }
+#endif
+
+    /* The device first send the first 1432 bytes of data, then the rest in chunks of 1426  */
+    /* Read first chunk */
+    if((length=recv(config.socket,read_buf,1432,0))==ERR) {
+      ERROR("Error reading response: %s\n",strerror(errno));
+      exit(3);
+    }
+    bytesLeft -= length;
+    bytesRead += length;
+    /* Read rest of data */
+    int bytes;
+    for(bytes=1432; bytes<totalBytes; bytes+=length){
+      if(bytesLeft>=1426){
+        if((length=recv(config.socket,&read_buf[bytesRead],1426,0))==ERR) {
+          ERROR("Error reading response: %s\n",strerror(errno));
+          exit(3);
+        }      
+        bytesLeft -= length;
+        bytesRead += length;
+      } else {
+        if((length=recv(config.socket,&read_buf[bytesRead],bytesLeft,0))==ERR) {
+          ERROR("Error reading response: %s\n",strerror(errno));
+          exit(3);
+        }       
+        bytesLeft -= length;
+        bytesRead += length;
+      }
+    }
+    /* Convert to host endianness */
+    for(i=0; i<bytesRead/2; i++) read_buf[i] = ntohs(read_buf[i]);
+
+    /* Open file for writing */
+    outFile = fopen(fileNameOut, "wb");
+    if (outFile == NULL){
+      fclose(outFile);
+      fprintf(stdout, "Error opening file %s, errno: %s\n", fileNameOut, strerror(errno));
+      exit(1);
+    } else {
+       printf("Opened file %s for writing data from function generator\n", fileNameOut);
+    }   
+    int res;
+    /* Dump to file, skip header  */
+    res = fwrite(&read_buf[(2+h_num)/2], sizeof(uint16_t), totalBytes/2, outFile);
+    if(res != totalBytes){
+      fclose(outFile);
+      free(read_buf);
+      printf("Could not write to file, wrote %d bytes\n", res*2);
+      exit(0);
+    } 
+    printf("Wrote data to file\n");
+    free(read_buf);
+    fclose(outFile);
+   
+    return 0;
+}
+
 /* http://www.binarytides.com/hostname-to-ip-address-c-sockets-linux/ */
 int hostname_to_ip(char *hostname , char *ip)
 {
@@ -766,6 +826,8 @@ int hostname_to_ip(char *hostname , char *ip)
 /* MAIN */
 int main (int argc, char *argv[])
 {
+
+  char * resp;
 	/* Parse command line options */
 	parse_options(argc, argv);
 	
@@ -780,13 +842,41 @@ int main (int argc, char *argv[])
 		/* Connect instrument */
 		if (connect_instrument())
 			exit(2);
-	
-		/* Send command */
-		send_command();
-	
-		/* Read response */
-		receive_response();
-	
+	  if(getWaveData){
+      //send_command(arbxdef?);
+      //waveforminfo = receive_response();
+      char * defCommand = calloc(9,1);
+      char * oldCommand = calloc(strlen(config.command)+1,1);
+      strcpy(oldCommand,config.command);
+      strncpy(defCommand,config.command,4);
+      strcat(defCommand,"DEF?");
+      config.command = defCommand;
+      send_command();
+      receive_response(&resp);
+      if(debug) printf("response: %s\n", resp);
+      
+      /* extract tokens */
+      char name[40]; /* Names should be max 9 chars or it will overflow to the other ARBs */
+      char interpolation[4]; /* ON or OFF */
+      int nPoints=0; // one point is 2 bytes
+      //sscanf(resp, "%s[,]%s[,]%d", name, interpolation, &nBytes);
+      sscanf(resp, "%[^','],%[^','],%d", name, interpolation, &nPoints);
+      if(debug) printf("name=%s, interpol=%s, nBytes=%d\n", name, interpolation, nPoints);
+      
+      config.command = oldCommand;
+      send_command();
+      receive_waveform(2*nPoints);
+
+
+
+    } else {
+      /* Send command */
+      send_command();
+    
+      /* Read response */
+      receive_response(&resp);
+      printf("response: %s\n", resp);
+	  }
 		/* Disconnect instrument */
 		disconnect_instrument();
 
