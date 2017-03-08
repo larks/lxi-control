@@ -43,6 +43,8 @@
 #define BROADCAST_ADDR	"255.255.255.255"
 #define BROADCAST_PORT	111
 
+#define MAX_WF_BUFFER 128*1024*2 // 128k points of 2 bytes each
+
 /* Status message macros */
 #define INFO(format, args...) \
 	fprintf (stdout, "" format, ## args)
@@ -53,14 +55,15 @@
 #define MODE_NORMAL	0
 #define MODE_DISCOVERY	1
 
-//bool debug = true;
-bool debug = false;
+bool debug = true;
+//bool debug = false;
 
 /*Waveform globals*/
 int16_t * waveform_buf;
 long lSize;
 FILE * file;
 FILE * outFile;
+char * fileNameOut;
 //int16_t * read_buf;
 bool wf = false;
 bool fitWaveform = false;
@@ -229,98 +232,108 @@ static int parse_options(int argc, char *argv[])
       /* Read waveform file  */
       case 'f':
         /* Check to see if the command is correct */
-        if(strcmp(config.command,"ARB1") ||
-           strcmp(config.command,"ARB2") ||
-           strcmp(config.command,"ARB3") ||
-           strcmp(config.command,"ARB4") ){
-
-          /* We want to define waveform */
-          wf=true;
-
-          if(debug) printf("file: %s\n", optarg);
-          file = fopen(optarg, "rb");
-          if (file == NULL){
-            fprintf(stdout, "Error opening file %s\n", optarg);
-            exit(1);
-          }
-          
-          fseek(file, 0L, SEEK_END);
-          lSize = ftell(file)-2; // Account for .wfm header
-          rewind(file);
-          if(debug) printf("waveform size: %ld\n", lSize);
-          
-          /* 16bit */
-          size_t res;
-          waveform_buf = (int16_t*) calloc((lSize/2), sizeof(int16_t));
-          rewind(file);
-          /* Read waveform max peak amplitude from file  */
-          res = fread(&fileAmp, sizeof(int16_t), 1, file); // Read wfm header
-          if(res != 1){
-            fclose(file);
-            free(waveform_buf);
-            printf("Could not read header in file %s, read %ld bytes\n", optarg, res*2);
-          } else {
-            fileAmp<0?fileAmp*=-1:fileAmp; // abs(fileAmp)
-          }
-          
-          /* Read waveform data and store in buffer */
-          res = fread(waveform_buf, sizeof(int16_t), lSize, file); // lSize:num_bytes
-          if(res != lSize/2){
-            fclose(file);
-            free(waveform_buf);
-            fprintf(stdout, "Failed to read file into buffer -- res: %ld, lSize: %ld\n", res, lSize);
-            exit(-1);
-          } else {
-            fclose(file);
-            printf("File %s successfully opened, waveform size is %ld points\n", optarg, lSize/2);
-          }
-          
-          /* Normalize and fit the waveform */
-          if(fitWaveform){
-            if(usingCustomAmp){
-              waveAmplitude = customAmp;
-              if(debug) printf("using custom amp: %d, waveamp: %d\n", customAmp, waveAmplitude);
-            } else {
-              waveAmplitude = fileAmp;
-              if(debug) printf("using amp read from file: %d, waveamp: %d\n", fileAmp, waveAmplitude);
-            }
-            /* Have to hack the shitty output of TTi's waveform editor */
-            int i;
-            uint16_t temp;
-            double fTemp;
-            for(i=0; i<lSize/2; i++){
-              /* Amplitude goes from -8192 to +8192, but -8192 is 0 in the generator
-               * only the 14 LSB bits are used.
-               * */
-              fTemp = (double) waveform_buf[i] / (double) waveAmplitude;
-              fTemp *= genAmplitude;
-              (fTemp >= 0) ? (fTemp+=0.5) : (fTemp-=0.5); // Rounding
-              fTemp += genAmplitude;
-  //            printf("%f ",fTemp);
-              //printf("%d ",(int16_t)fTemp);
-              temp = (uint16_t) fTemp;
-              waveform_buf[i] = temp & 0x7fff;
-            }
-          }
-       } else {
-          printf("File defined but command is not ARBx <bin>, no waveform will be loaded to the function generator\n");
-          wf=false;
-       } if(strcmp(config.command,"ARB1?") ||
-            strcmp(config.command,"ARB2?") ||
-            strcmp(config.command,"ARB3?") ||
-            strcmp(config.command,"ARB4?") ){
+        if((strncmp(config.command,"ARB1",4)==0 ||
+            strncmp(config.command,"ARB2",4)==0 ||
+            strncmp(config.command,"ARB3",4)==0 ||
+            strncmp(config.command,"ARB4",4)==0) 
+            ){
+          if(debug) printf("ARBx start, strlen:%d, command: %s, last char: %c\n", strlen(config.command), config.command, config.command[strlen(config.command)-1]);
+          /* ARBx?  */
+          if( (strlen(config.command) == 5) && config.command[strlen(config.command)-1] == '?' ){
             /* We want to fetch waveform */
             getWaveData=true;
-            
+            fileNameOut = (char*) calloc(strlen(optarg)+1, sizeof(char));
+            memcpy(fileNameOut, optarg, strlen(optarg));
+            if(debug) printf("case f, filenameout: %s\n", fileNameOut);
+           #if 0 
             /* Open file for writing */
             outFile = fopen(optarg, "wb");
             if (outFile == NULL){
+              fclose(outFile);
               fprintf(stdout, "Error opening file %s\n", optarg);
               exit(1);
             } else {
               printf("Opened file %s for writing data from function generator\n");
-            }     
-        }
+            }   
+            #endif
+          
+          } else if ( strlen(config.command) == 4 ) {
+            /* We want to define waveform */
+            wf=true;
+            printf("strcmp: %d\n", strncmp(config.command, "ARB1x", 5));
+            if(debug) printf("file: %s\n", optarg);
+            file = fopen(optarg, "rb");
+            if (file == NULL){
+              fprintf(stdout, "Read: Error opening file %s, errno: %s\n", optarg,strerror(errno));
+              exit(1);
+            }
+            
+            fseek(file, 0L, SEEK_END);
+            lSize = ftell(file)-2; // Account for .wfm header
+            rewind(file);
+            if(debug) printf("waveform size: %ld\n", lSize);
+            
+            /* 16bit */
+            size_t res;
+            waveform_buf = (int16_t*) calloc((lSize/2), sizeof(int16_t));
+            rewind(file);
+            /* Read waveform max peak amplitude from file  */
+            res = fread(&fileAmp, sizeof(int16_t), 1, file); // Read wfm header
+            if(res != 1){
+              fclose(file);
+              free(waveform_buf);
+              printf("Could not read header in file %s, read %ld bytes\n", optarg, res*2);
+            } else {
+              fileAmp<0?fileAmp*=-1:fileAmp; // abs(fileAmp)
+            }
+            
+            /* Read waveform data and store in buffer */
+            res = fread(waveform_buf, sizeof(int16_t), lSize, file); // lSize:num_bytes
+            if(res != lSize/2){
+              fclose(file);
+              free(waveform_buf);
+              fprintf(stdout, "Failed to read file into buffer -- res: %ld, lSize: %ld\n", res, lSize);
+              exit(-1);
+            } else {
+              fclose(file);
+              printf("File %s successfully opened, waveform size is %ld points\n", optarg, lSize/2);
+            }
+            
+            /* Normalize and fit the waveform */
+            if(fitWaveform){
+              if(usingCustomAmp){
+                waveAmplitude = customAmp;
+                if(debug) printf("using custom amp: %d, waveamp: %d\n", customAmp, waveAmplitude);
+              } else {
+                waveAmplitude = fileAmp;
+                if(debug) printf("using amp read from file: %d, waveamp: %d\n", fileAmp, waveAmplitude);
+              }
+              /* Have to hack the shitty output of TTi's waveform editor */
+              int i;
+              uint16_t temp;
+              double fTemp;
+              for(i=0; i<lSize/2; i++){
+                /* Amplitude goes from -8192 to +8192, but -8192 is 0 in the generator
+                 * only the 14 LSB bits are used.
+                 * */
+                fTemp = (double) waveform_buf[i] / (double) waveAmplitude;
+                fTemp *= genAmplitude;
+                (fTemp >= 0) ? (fTemp+=0.5) : (fTemp-=0.5); // Rounding
+                fTemp += genAmplitude;
+    //            printf("%f ",fTemp);
+                //printf("%d ",(int16_t)fTemp);
+                temp = (uint16_t) fTemp;
+                waveform_buf[i] = temp & 0x7fff;
+              }
+            }
+         } else {
+            printf("File defined but command is not ARBx <bin>, no waveform will be loaded to the function generator\n");
+            wf=false;
+            printf("strlen: %d\n", strlen(config.command));
+         }
+      } else {
+        printf("Command not recognized: %s\n", config.command);
+      }
 
 				break;
 
@@ -542,34 +555,57 @@ static int receive_response(void)
 	}
 
   if(getWaveData){
+    if(debug) printf("getWaveData true\n");
     int16_t * read_buf;
     int nChars;
     long size;
-
+    char * header;
+    header = (char*)calloc(2+1, sizeof(char));
     /* Read response (#<number of chars to follow>*/
-  	if((length=recv(config.socket,&buffer[0],2,0))==ERR) {
+  	if((length=recv(config.socket,header,2,0))==ERR) {
 		  ERROR("Error reading response: %s\n",strerror(errno));
   		exit(3);
 	  } 
-    if(buffer[0] == '#'){
-      nChars = buffer[1];
+    if(debug) printf("buffer: %s, length: %ld\n", header, strlen(header) );
+    if(strncmp(header, "#x", 1) == 0){
+      if(debug) printf("nChars: ddd%d\n", *(header+1)-'0');
+        nChars = *(header+1)-'0';
+        if(debug) printf("nChars: %d\n", nChars);
+        free(header);
+//        exit(0);
     } else {
+      free(header);
       ERROR("Header not correct: %s\n", buffer);
       return 1;
     }
     /* Read <number of bytes to follow>*/
-  	if((length=recv(config.socket,&buffer[0],nChars,0))==ERR) {
+    header = calloc(nChars, sizeof(char));
+  	if((length=recv(config.socket,header,nChars,0))==ERR) {
+      free(header);
 		  ERROR("Error reading response: %s\n",strerror(errno));
   		exit(3);
 	  } 
-    size = (long) atoi(buffer);
-    
+    size = (long) atoi(header);
+    if(debug) printf("size: %ld\n", size);
+    free(header);
+//    exit(0);
     /* Read data*/
     read_buf = (int16_t*) calloc((size/2), sizeof(int16_t));
-  	if((length=recv(config.socket,&read_buf,size,0))==ERR) {
+  	if((length=recv(config.socket,read_buf,size,0))==ERR) {
 		  ERROR("Error reading response: %s\n",strerror(errno));
   		exit(3);
 	  }
+    int i;
+    for(i=0; i<size/2; i++) read_buf[i] = ntohs(read_buf[i]);
+    /* Open file for writing */
+    outFile = fopen(fileNameOut, "wb");
+    if (outFile == NULL){
+      fclose(outFile);
+      fprintf(stdout, "Error opening file %s, errno: %s\n", fileNameOut, strerror(errno));
+      exit(1);
+    } else {
+       printf("Opened file %s for writing data from function generator\n", fileNameOut);
+    }   
     int res;
     res = fwrite(read_buf, sizeof(int16_t), size/2, outFile);
     if(res != size/2){
@@ -577,27 +613,27 @@ static int receive_response(void)
       free(read_buf);
       printf("Could not write to file, wrote %ld bytes\n", res*2);
       exit(0);
-    } else {
-      printf("Wrote data to file\n");
-      fclose(outFile);
+    } 
+    printf("Wrote data to file\n");
+    free(read_buf);
+    fclose(outFile);
+    return 0;    
+  } else {
+    /* Read response */
+    if((length=recv(config.socket,&buffer[0],189500,0))==ERR)
+    {
+      ERROR("Error reading response: %s\n",strerror(errno));
+      exit(3);
     }
+    
+    /* Add zero character (C string) */
+    buffer[length]=0; 
+    
+    /* Print received data */
+    printf("%s",buffer);
+    
+    return 0;
   }
-
-
-	/* Read response */
-	if((length=recv(config.socket,&buffer[0],189500,0))==ERR)
-	{
-		ERROR("Error reading response: %s\n",strerror(errno));
-		exit(3);
-	}
-	
-	/* Add zero character (C string) */
-	buffer[length]=0; 
-	
-	/* Print received data */
-	printf("%s",buffer);
-	
-	return 0;
 }
 
 static int discover_instruments(void)
