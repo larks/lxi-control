@@ -676,7 +676,8 @@ static int receive_waveform(int nBytes)
   long length;
 	struct timespec t;
   int h_num = snprintf(NULL, 0, "%d", nBytes); /*Count chars in nBytes*/
-  int totalBytes = 1+1+h_num+nBytes; /* #+N+nBytes+data */
+  int header = 1+1+h_num; /* #+N+nBytes */
+  int totalBytes = header+nBytes; /* #+N+nBytes+data */
   int bytesLeft = totalBytes;
 	/* Skip receive if no '?' in command */
 	for (i=0; i<strlen(config.command);i++)
@@ -710,32 +711,6 @@ static int receive_waveform(int nBytes)
      * */
     //read_buf = (int16_t*) calloc((size/2), sizeof(int16_t));
     read_buf = (uint16_t*) calloc(totalBytes, sizeof(uint8_t));
-#if 0
-  int bytes=0;
-  int i;
-  int bytesLeft=size;
-  length=0;
-  printf("Read data: size=%ld\n", size);
-  for(bytes=0; bytes<totalBytes; bytes+=length){
-    if(bytesLeft>1426){
-      if((length=recv(config.socket,read_buf,1426,0))==ERR) {
-        ERROR("Error reading response: %s\n",strerror(errno));
-        exit(3);
-      }
-      printf("length: %d\n", length);
-      //for(i=bytes; i<((int)(bytes+length)); i++) read_buf[i] = ntohs(read_buf[i]);
-      bytesLeft-=length;
-    /* Rest of data */
-    } else {
-       if((length=recv(config.socket,read_buf,bytesLeft,0))==ERR) {
-        ERROR("Error reading response: %s\n",strerror(errno));
-        exit(3);
-      }
-      printf("length: %d\n", length);
-      //for(i=bytes; i<((int)(bytes+length)); i++) read_buf[i] = ntohs(read_buf[i]);
-    }
-  }
-#endif
 
     /* The device first send the first 1432 bytes of data, then the rest in chunks of 1426  */
     /* Read first chunk */
@@ -765,7 +740,8 @@ static int receive_waveform(int nBytes)
       }
     }
     /* Convert to host endianness */
-    for(i=0; i<bytesRead/2; i++) read_buf[i] = ntohs(read_buf[i]);
+    uint16_t * netToHost = (uint16_t*) calloc(nBytes, sizeof(uint8_t));
+    for(i=header; i<(bytesRead-header)/2; i++) netToHost[i] = ntohs(read_buf[i]);
 
     /* Open file for writing */
     outFile = fopen(fileNameOut, "wb");
@@ -778,15 +754,18 @@ static int receive_waveform(int nBytes)
     }   
     int res;
     /* Dump to file, skip header  */
-    res = fwrite(&read_buf[(2+h_num)/2], sizeof(uint16_t), totalBytes/2, outFile);
+    res = fwrite(netToHost, sizeof(uint16_t), nBytes/2, outFile);
     if(res != totalBytes){
       fclose(outFile);
       free(read_buf);
+      free(netToHost);
       printf("Could not write to file, wrote %d bytes\n", res*2);
       exit(0);
     } 
     printf("Wrote data to file\n");
+    /* Free up memory */
     free(read_buf);
+    free(netToHost);
     fclose(outFile);
    
     return 0;
