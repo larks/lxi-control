@@ -74,6 +74,10 @@ int customAmp=0; // Function generator peak amplitude
 bool usingCustomAmp = false;
 bool getWaveData = false;
 
+/* Plotting */
+bool dumpPlot = false;
+char * plotFileName;
+
 /* Configuration structure */
 static struct {
 	char *ip;		/* Instrument IP */
@@ -116,6 +120,7 @@ void print_help(void)
 								config.port);
 	INFO("--scpi,s     <command>      SCPI command\n");
 	INFO("--file,f     <filename>     Waveform filename\n");
+	INFO("--gnuplot,g  <filename>     Plot waveform in gnuplot and dump to file\n");
 	INFO("--adjust,a   <amp>          Adjust waveform to fit original peak amplitude <amp> \n"
        "                            to function generator max peak amplitude of 8192 counts.\n"
        "                            Default value is read from first 2 bytes of .wfm file\n");
@@ -145,6 +150,7 @@ static int parse_options(int argc, char *argv[])
 			{"port",	  required_argument,	0, 'p'},
 			{"scpi",	  required_argument,	0, 's'},
 			{"file",	  required_argument,	0, 'f'},
+			{"gnuplot", required_argument,	0, 'g'},
 			{"adjust",	optional_argument,	0, 'a'},
 			{"timeout",	no_argument,		    0, 't'},
 			{"discover",no_argument,		    0, 'd'},
@@ -157,7 +163,7 @@ static int parse_options(int argc, char *argv[])
 		int option_index = 0;
 
 		/* Parse argument using getopt_long (no short opts allowed) */
-		c = getopt_long (argc, argv, "inpsfatdvh", long_options, &option_index);
+		c = getopt_long (argc, argv, "inpsfgatdvh", long_options, &option_index);
 		//c = getopt_long (argc, argv, "i:n:p:s:f:a:t:d:v:h:", long_options, &option_index);
 
 		/* Detect the end of the options. */
@@ -204,7 +210,8 @@ static int parse_options(int argc, char *argv[])
 			case 's':
 				config.command = optarg;
 				break;
-			/* fit */
+		
+      /* fit */
       case 'a':
         fitWaveform = true;
         if(optarg) {
@@ -232,10 +239,10 @@ static int parse_options(int argc, char *argv[])
       /* Read waveform file  */
       case 'f':
         /* Check to see if the command is correct */
-        if((strncmp(config.command,"ARB1",4)==0 ||
-            strncmp(config.command,"ARB2",4)==0 ||
-            strncmp(config.command,"ARB3",4)==0 ||
-            strncmp(config.command,"ARB4",4)==0) 
+        if((strncasecmp(config.command,"ARB1",4)==0 ||
+            strncasecmp(config.command,"ARB2",4)==0 ||
+            strncasecmp(config.command,"ARB3",4)==0 ||
+            strncasecmp(config.command,"ARB4",4)==0) 
             ){
           if(debug) printf("ARBx start, strlen:%ld, command: %s, last char: %c\n", strlen(config.command), config.command, config.command[strlen(config.command)-1]);
           /* ARBx?  */
@@ -335,6 +342,19 @@ static int parse_options(int argc, char *argv[])
         printf("Command not recognized: %s\n", config.command);
       }
 
+				break;
+      /* Plot waveform to file  */
+      case 'g':
+        if(getWaveData){
+          if(debug) printf("optarg: %s\n",optarg);
+          if(!optarg){
+            printf("Plot filename not specified\n");
+            exit(1);
+          }
+          plotFileName = (char*) calloc(strlen(optarg)+1, sizeof(char));
+          strcpy(plotFileName, optarg);
+          printf("Waveform data from function generator will be stored to: %s \n", plotFileName); 
+        }
 				break;
 
 			case 'v':
@@ -710,9 +730,10 @@ static int receive_waveform(int nBytes)
      * Has to be read 1426 bytes at a time, first frame is 14267+header
      * */
     //read_buf = (int16_t*) calloc((size/2), sizeof(int16_t));
-    read_buf = (uint16_t*) calloc(totalBytes, sizeof(uint8_t));
+    read_buf = (uint16_t*) calloc(totalBytes/2, sizeof(uint16_t));
 
     /* The device first send the first 1432 bytes of data, then the rest in chunks of 1426  */
+//    #if 0
     /* Read first chunk */
     if((length=recv(config.socket,read_buf,1432,0))==ERR) {
       ERROR("Error reading response: %s\n",strerror(errno));
@@ -724,14 +745,14 @@ static int receive_waveform(int nBytes)
     int bytes;
     for(bytes=1432; bytes<totalBytes; bytes+=length){
       if(bytesLeft>=1426){
-        if((length=recv(config.socket,&read_buf[bytesRead],1426,0))==ERR) {
+        if((length=recv(config.socket,&read_buf[bytes/2],1426,0))==ERR) {
           ERROR("Error reading response: %s\n",strerror(errno));
           exit(3);
         }      
         bytesLeft -= length;
         bytesRead += length;
       } else {
-        if((length=recv(config.socket,&read_buf[bytesRead],bytesLeft,0))==ERR) {
+        if((length=recv(config.socket,&read_buf[bytes/2],bytesLeft,0))==ERR) {
           ERROR("Error reading response: %s\n",strerror(errno));
           exit(3);
         }       
@@ -739,9 +760,29 @@ static int receive_waveform(int nBytes)
         bytesRead += length;
       }
     }
+//    #endif
+    #if 0
+    if((length=recv(config.socket,read_buf,totalBytes,0))<0){//==ERR) {
+      ERROR("Error reading response: %s\n",strerror(errno));
+      exit(3);
+    }
+    printf("length: %d\n", length);
+    #endif
     /* Convert to host endianness */
-    uint16_t * netToHost = (uint16_t*) calloc(nBytes, sizeof(uint8_t));
+    uint16_t * netToHost = (uint16_t*) calloc(nBytes/2, sizeof(uint16_t));
     for(i=header; i<(bytesRead-header)/2; i++) netToHost[i] = ntohs(read_buf[i]);
+    
+    /* Plot test */
+    FILE *gnuplot = popen("gnuplot", "w");
+    fprintf(gnuplot, "plot '-'\n");
+    for(i=0; i<nBytes/2; i++){
+      fprintf(gnuplot, "%d %d\n", i, netToHost[i]);
+    }
+    fprintf(gnuplot, "e\n");
+    fprintf(gnuplot, "set term png\n");
+    fprintf(gnuplot, "set output '%s'\n", plotFileName);
+    fprintf(gnuplot, "replot\n");
+    fflush(gnuplot);
 
     /* Open file for writing */
     outFile = fopen(fileNameOut, "wb");
@@ -755,7 +796,7 @@ static int receive_waveform(int nBytes)
     int res;
     /* Dump to file, skip header  */
     res = fwrite(netToHost, sizeof(uint16_t), nBytes/2, outFile);
-    if(res != totalBytes){
+    if(res != nBytes){
       fclose(outFile);
       free(read_buf);
       free(netToHost);
