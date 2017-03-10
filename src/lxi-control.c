@@ -121,7 +121,9 @@ int hostname_to_ip(char *  , char *);
 
 void print_help(void)
 {
+  INFO("----------------------------------------------------------------------------------------------\n");
 	INFO("Usage: lxi-control [options]\n");
+  INFO("----------------------------------------------------------------------------------------------\n");
 	INFO("\n");
 	INFO("Options:\n");
 	INFO("--ip,i       <ip>           Remote device IP\n");
@@ -148,6 +150,7 @@ void print_help(void)
   INFO("* Fetch waveform stored in ARB1, store to ~/test2.out and create a png of the waveform with default name:\n");
   INFO("\t./lxi-control --host functiongenerator.cern.ch --scpi arb1? --file ~/test2.out -g\n\n");
   INFO("* Load waveform to function generator:\n");
+  INFO("\n");
 }
 static int parse_options(int argc, char *argv[])
 {
@@ -350,8 +353,8 @@ static int parse_options(int argc, char *argv[])
       } else {
         printf("Command not recognized: %s\n", config.command);
       }
-
 				break;
+
       /* Plot waveform to file  */
       case 'g':
         if(getWaveData){
@@ -368,15 +371,18 @@ static int parse_options(int argc, char *argv[])
         }
 				break;
 
+      /* Print version */
 			case 'v':
 				INFO("lxi-control v%s\n", APP_VERSION);
 				exit(0);
 				break;
-
+  
+      /* Discover devices */
 			case 'd':
 				config.mode = MODE_DISCOVERY;
 				break;
 
+      /* Print help */
 			case 'h':
 				print_help();
 				exit(0);
