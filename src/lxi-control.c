@@ -55,8 +55,8 @@
 #define MODE_NORMAL	0
 #define MODE_DISCOVERY	1
 
-bool debug = true;
-//bool debug = false;
+//bool debug = true;
+bool debug = false;
 
 /*Waveform globals*/
 int16_t * waveform_buf;
@@ -77,6 +77,7 @@ bool getWaveData = false;
 /* Plotting */
 bool dumpPlot = false;
 char * plotFileName;
+bool plotNameSpecified = false;
 
 /* Configuration structure */
 static struct {
@@ -94,6 +95,15 @@ static struct {
 	MODE_NORMAL,
 	NET_TIMEOUT
 };
+
+/* Waveform information */
+typedef struct {
+  char name[40];         /* Waveform name */
+  char interpolation[4]; /* Interpolation ON or OFF */
+  int  length;           /* Number of points */
+  int  nBytes;           /* Number of bytes */
+  int  arb;              /* Waveform number (ARB<arb>) */
+} wf_info_t;
 
 /* Binary UDP payload which represents GETPORT RPC call */
 char rpc_GETPORT_msg[] = {
@@ -118,9 +128,10 @@ void print_help(void)
 	INFO("--host,n     <host name>    Remote device host name\n");
 	INFO("--port,p     <port>         Remote device port (default: %d)\n",
 								config.port);
-	INFO("--scpi,s     <command>      SCPI command\n");
+	INFO("--scpi,s     <command>      SCPI command. Commands are not case sensitive\n");
 	INFO("--file,f     <filename>     Waveform filename\n");
-	INFO("--gnuplot,g  <filename>     Plot waveform in gnuplot and dump to file\n");
+	INFO("--gnuplot,g  <filename>     Plot waveform in gnuplot and dump to file (in home folder)\n"
+       "                            (default is name given in function generator)\n");
 	INFO("--adjust,a   <amp>          Adjust waveform to fit original peak amplitude <amp> \n"
        "                            to function generator max peak amplitude of 8192 counts.\n"
        "                            Default value is read from first 2 bytes of .wfm file\n");
@@ -129,7 +140,14 @@ void print_help(void)
 	INFO("--discover,d                Discover LXI devices on hosts subnet\n");
 	INFO("--version,v                 Display version\n");
 	INFO("--help,h                    Display help\n");
-	INFO("\n");
+	INFO("\n\n");
+  /* Print some examples */
+  INFO("----------------------------------------------------------------------------------------------\n");
+  INFO("Examples:\n");
+  INFO("----------------------------------------------------------------------------------------------\n");
+  INFO("* Fetch waveform stored in ARB1, store to ~/test2.out and create a png of the waveform with default name:\n");
+  INFO("\t./lxi-control --host functiongenerator.cern.ch --scpi arb1? --file ~/test2.out -g\n\n");
+  INFO("* Load waveform to function generator:\n");
 }
 static int parse_options(int argc, char *argv[])
 {
@@ -150,7 +168,7 @@ static int parse_options(int argc, char *argv[])
 			{"port",	  required_argument,	0, 'p'},
 			{"scpi",	  required_argument,	0, 's'},
 			{"file",	  required_argument,	0, 'f'},
-			{"gnuplot", required_argument,	0, 'g'},
+			{"gnuplot", optional_argument,	0, 'g'},
 			{"adjust",	optional_argument,	0, 'a'},
 			{"timeout",	no_argument,		    0, 't'},
 			{"discover",no_argument,		    0, 'd'},
@@ -163,7 +181,7 @@ static int parse_options(int argc, char *argv[])
 		int option_index = 0;
 
 		/* Parse argument using getopt_long (no short opts allowed) */
-		c = getopt_long (argc, argv, "inpsfgatdvh", long_options, &option_index);
+		c = getopt_long (argc, argv, "i:n:p:s:f:g::a::tdvh", long_options, &option_index);
 		//c = getopt_long (argc, argv, "i:n:p:s:f:a:t:d:v:h:", long_options, &option_index);
 
 		/* Detect the end of the options. */
@@ -245,6 +263,7 @@ static int parse_options(int argc, char *argv[])
             strncasecmp(config.command,"ARB4",4)==0) 
             ){
           if(debug) printf("ARBx start, strlen:%ld, command: %s, last char: %c\n", strlen(config.command), config.command, config.command[strlen(config.command)-1]);
+          
           /* ARBx?  */
           if( (strlen(config.command) == 5) && config.command[strlen(config.command)-1] == '?' ){
             /* We want to fetch waveform */
@@ -252,18 +271,8 @@ static int parse_options(int argc, char *argv[])
             fileNameOut = (char*) calloc(strlen(optarg)+1, sizeof(char));
             memcpy(fileNameOut, optarg, strlen(optarg));
             if(debug) printf("case f, filenameout: %s\n", fileNameOut);
-           #if 0 
-            /* Open file for writing */
-            outFile = fopen(optarg, "wb");
-            if (outFile == NULL){
-              fclose(outFile);
-              fprintf(stdout, "Error opening file %s\n", optarg);
-              exit(1);
-            } else {
-              printf("Opened file %s for writing data from function generator\n");
-            }   
-            #endif
-          
+
+          /* ARBx <bin>  */          
           } else if ( strlen(config.command) == 4 ) {
             /* We want to define waveform */
             wf=true;
@@ -348,12 +357,14 @@ static int parse_options(int argc, char *argv[])
         if(getWaveData){
           if(debug) printf("optarg: %s\n",optarg);
           if(!optarg){
-            printf("Plot filename not specified\n");
-            exit(1);
+            printf("Plot filename not specified, using name stored in function generator\n");
+            //exit(1);
+          } else {
+            plotFileName = (char*) calloc(strlen(optarg)+1, sizeof(char));
+            strcpy(plotFileName, optarg);
+            printf("Waveform data from function generator will be stored to: %s \n", plotFileName);
+            plotNameSpecified = true;
           }
-          plotFileName = (char*) calloc(strlen(optarg)+1, sizeof(char));
-          strcpy(plotFileName, optarg);
-          printf("Waveform data from function generator will be stored to: %s \n", plotFileName); 
         }
 				break;
 
@@ -688,16 +699,17 @@ static int discover_instruments(void)
 	return 0;
 }
 
-static int receive_waveform(int nBytes)
+static int receive_waveform(wf_info_t wf_info)
 {
 	int i, question = 0;
 	fd_set rset;
 	int ret;
   long length;
 	struct timespec t;
-  int h_num = snprintf(NULL, 0, "%d", nBytes); /*Count chars in nBytes*/
+//  int h_num = snprintf(NULL, 0, "%d", nBytes); /*Count chars in nBytes*/
+  int h_num = snprintf(NULL, 0, "%d", wf_info.nBytes); /*Count chars in nBytes*/
   int header = 1+1+h_num; /* #+N+nBytes */
-  int totalBytes = header+nBytes; /* #+N+nBytes+data */
+  int totalBytes = header+wf_info.nBytes; /* #+N+nBytes+data */
   int bytesLeft = totalBytes;
 	/* Skip receive if no '?' in command */
 	for (i=0; i<strlen(config.command);i++)
@@ -760,29 +772,35 @@ static int receive_waveform(int nBytes)
         bytesRead += length;
       }
     }
-//    #endif
-    #if 0
-    if((length=recv(config.socket,read_buf,totalBytes,0))<0){//==ERR) {
-      ERROR("Error reading response: %s\n",strerror(errno));
-      exit(3);
-    }
-    printf("length: %d\n", length);
-    #endif
+
     /* Convert to host endianness */
-    uint16_t * netToHost = (uint16_t*) calloc(nBytes/2, sizeof(uint16_t));
+    uint16_t * netToHost = (uint16_t*) calloc(wf_info.nBytes/2, sizeof(uint16_t));
     for(i=header; i<(bytesRead-header)/2; i++) netToHost[i] = ntohs(read_buf[i]);
     
     /* Plot test */
+    if(!plotNameSpecified){
+      plotFileName = (char*) calloc(strlen(wf_info.name)+4+1, sizeof(char)); /*Add .png and \0*/
+      strcpy(plotFileName, wf_info.name);
+      strcat(plotFileName, ".png");
+    }
     FILE *gnuplot = popen("gnuplot", "w");
-    fprintf(gnuplot, "plot '-'\n");
-    for(i=0; i<nBytes/2; i++){
+    fprintf(gnuplot, "set term png\n");
+    fprintf(gnuplot, "set xlabel 'Bins'\n");
+    fprintf(gnuplot, "set ylabel 'Value'\n");
+    fprintf(gnuplot, "set title 'Arbitrary waveform ARB%d: %s'\n", wf_info.arb, wf_info.name);
+    fprintf(gnuplot, "set output '~/%s'\n", plotFileName);
+    fprintf(gnuplot, "plot [0:%d] [0:16384]'-'\n", wf_info.length);
+    for(i=0; i<wf_info.nBytes/2; i++){
       fprintf(gnuplot, "%d %d\n", i, netToHost[i]);
     }
     fprintf(gnuplot, "e\n");
+/*
     fprintf(gnuplot, "set term png\n");
     fprintf(gnuplot, "set output '%s'\n", plotFileName);
     fprintf(gnuplot, "replot\n");
+*/
     fflush(gnuplot);
+    printf("Waveform plot stored as ~/%s\n", plotFileName);
 
     /* Open file for writing */
     outFile = fopen(fileNameOut, "wb");
@@ -795,19 +813,47 @@ static int receive_waveform(int nBytes)
     }   
     int res;
     /* Dump to file, skip header  */
-    res = fwrite(netToHost, sizeof(uint16_t), nBytes/2, outFile);
-    if(res != nBytes){
+    res = fwrite(netToHost, sizeof(uint16_t), wf_info.nBytes/2, outFile);
+    if(res != wf_info.nBytes/2){
       fclose(outFile);
       free(read_buf);
       free(netToHost);
+      printf("Could not write to file, wrote %d bytes, nBytes=%d\n", res*2, wf_info.nBytes);
+      exit(1);
+    }
+    /* Also write a .wfm file */
+    FILE * wfmFile;
+    char * wfm = (char*) calloc(strlen(fileNameOut)+4+1, sizeof(char));
+    strcpy(wfm, fileNameOut);
+    strcat(wfm, ".wfm");
+    wfmFile = fopen(wfm, "wb");
+    if (wfmFile == NULL){
+      fclose(outFile);
+      fprintf(stdout, "Error opening file %s, errno: %s\n", wfm, strerror(errno));
+      exit(1);
+    } else {
+       printf("Wrote wfm file: %s\n", wfm);
+    }
+    /* Dump to wfm file  */
+    uint16_t wfmHeader = 0x2000;
+    res = fwrite(&wfmHeader, sizeof(uint16_t), 1, wfmFile);
+    res = fwrite(netToHost, sizeof(uint16_t), wf_info.nBytes/2, wfmFile);
+    if(res != wf_info.nBytes/2){
+      fclose(wfmFile);
+      free(read_buf);
+      free(netToHost);
       printf("Could not write to file, wrote %d bytes\n", res*2);
-      exit(0);
-    } 
-    printf("Wrote data to file\n");
+      exit(1);
+    }
+    printf("Wrote data to files\n");
+
     /* Free up memory */
+    free(plotFileName);
     free(read_buf);
     free(netToHost);
+    free(wfm);
     fclose(outFile);
+    fclose(wfmFile);
    
     return 0;
 }
@@ -865,6 +911,8 @@ int main (int argc, char *argv[])
 	  if(getWaveData){
       //send_command(arbxdef?);
       //waveforminfo = receive_response();
+      wf_info_t wf_info;
+      wf_info.arb = (int)config.command[3]-'0'; /* Set arb number */ 
       char * defCommand = calloc(9,1);
       char * oldCommand = calloc(strlen(config.command)+1,1);
       strcpy(oldCommand,config.command);
@@ -879,20 +927,19 @@ int main (int argc, char *argv[])
       char name[40]; /* Names should be max 9 chars or it will overflow to the other ARBs */
       char interpolation[4]; /* ON or OFF */
       int nPoints=0; // one point is 2 bytes
-      //sscanf(resp, "%s[,]%s[,]%d", name, interpolation, &nBytes);
-      sscanf(resp, "%[^','],%[^','],%d", name, interpolation, &nPoints);
-      if(debug) printf("name=%s, interpol=%s, nBytes=%d\n", name, interpolation, nPoints);
-      
+      sscanf(resp, "%[^','],%[^','],%d", wf_info.name, wf_info.interpolation, &wf_info.length);
+      wf_info.nBytes = 2*wf_info.length;
+//      if(debug) printf("name=%s, interpol=%s, nBytes=%d\n", name, interpolation, nPoints);
+      if(debug) printf("name=%s, interpol=%s, length=%d, nBytes=%d\n", wf_info.name, wf_info.interpolation, wf_info.length, wf_info.nBytes);
+
       config.command = oldCommand;
       send_command();
-      receive_waveform(2*nPoints);
+      receive_waveform(wf_info);
 
-
-
+    /* Normal command */
     } else {
       /* Send command */
       send_command();
-    
       /* Read response */
       receive_response(&resp);
       printf("response: %s\n", resp);
@@ -902,7 +949,6 @@ int main (int argc, char *argv[])
 
     /* Free up */
     free(waveform_buf);
-//    free(read_buf);
 	}
 	exit (0);
 }
