@@ -596,14 +596,16 @@ static int receive_response(char ** response)
     ERROR("Error reading response: %s\n",strerror(errno));
     exit(3);
   }
+  printf("length: %d\n", length);
   
   /* Add zero character (C string) */
   buffer[length]=0;
   //response = calloc(length, sizeof(char));
-  *response = *&buffer;
+  if(*response != NULL) *response = *&buffer;
   //memcpy(response, buffer, length);
   /* Print received data */
-  printf("%s",buffer);
+  if(buffer != NULL)
+    printf("%s",buffer);
   
   return 0;
 }
@@ -693,7 +695,7 @@ static int discover_instruments(void)
 			send_command();
 			
 			INFO("IP %s  -  ", config.ip);
-			
+		  
 			receive_response(NULL);
 		
 			disconnect_instrument();
@@ -945,10 +947,11 @@ int main (int argc, char *argv[])
     /* Normal command */
     } else {
       /* Send command */
+      printf("Sending command: %s\n", config.command);
       send_command();
       /* Read response */
       receive_response(&resp);
-      printf("response: %s\n", resp);
+  //    printf("response: %s\n", resp);
 	  }
 		/* Disconnect instrument */
 		disconnect_instrument();
