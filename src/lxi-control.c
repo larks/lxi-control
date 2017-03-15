@@ -34,7 +34,7 @@
 #include <unistd.h> // implicit decl of close 
 
 /* Application configuration */
-#define APP_VERSION		"1.1.0"
+#define APP_VERSION		"1.2.0c"
 #define NET_NODELAY	1	// TCP nodelay enabled
 #define NET_TIMEOUT	4	// Network timeout in seconds (default)
 #define NET_MAX_NODES	256
